@@ -1,10 +1,16 @@
 import numpy as np
-
+from typing import Union
+from numpy.linalg import norm
 from scipy.sparse.linalg import eigs, LinearOperator
+from scipy.linalg import qr, rq
 
 # todo class `TransferMatrix` contain transpose() ... 
-
+ts = np
 Tensor = np.ndarray
+
+__all__ = [
+        'UMPS'
+        ]
 
 
 class UMPS:
@@ -16,11 +22,16 @@ class UMPS:
         self.isnormalize = isnormalize
         if not self.isnormalize:
             self.normalize()
+        self.canonical_form = 'Normal'
+        self.l = None
+        self.r = None
+        self.L = None
+        self.Al = None
+        self.Ar = None
 
     def calTransMat(self, op=False, matrix=False):
         if op & matrix:
             raise ValueError('Can\'t output both matrix and operator.')
-        
         if (not op) and (not matrix):
             if self.D <= 30:
                 matrix = True
@@ -47,7 +58,7 @@ class UMPS:
 
     def calFixedPoint(self, mode='left') -> Tensor:
         if not (mode in ['left', 'right']):
-            raise ValueError(f'mode should be left or right, but get {mode}')
+            raise ValueError(f'mode should be left or right, but get {mode}.')
         if mode == 'left':
             left = True
         else:
@@ -62,12 +73,82 @@ class UMPS:
         f *= np.sign(np.trace(f))
 
         return f
-    
+
     def fixedPoint(self):
         l = self.calFixedPoint(mode='left')
         r = self.calFixedPoint(mode='right')
         l = l / np.tensordot(l, r, ([0, 1], [0, 1]))
-        return l, r
+        self.r = r
+        self.l = l.T
+
+    def leftCanonical(self, iteration=True, tol=1e-14, L0=None, maxiter=None):
+        if self.canonical_form != 'left':
+            if iteration:
+                if maxiter is None:
+                    maxiter = self.D*self.d
+                if L0 is None:
+                    L0 = ts.random.randn(self.D, self.D)
+                L0 = L0 / norm(L0)
+                Al = ts.tensordot(L0, self.A, ([1], [0]))
+                Al, L = positive_qr(Al.reshape([self.D*self.d, self.D]))
+                delta = norm(L - L0)
+                i = 1
+                while delta > tol:
+                    Al = ts.tensordot(L, self.A, ([1], [0]))
+                    Al, L0 = positive_qr(Al.reshape([self.D*self.d, self.D]))
+                    L0 = L0 / norm(L0)
+                    delta = norm(L0 - L)
+                    L = L0
+                    if i > maxiter:
+                        raise ValueError(f'The iteration still not converge \
+                                after {i} step.')
+                self.Al = Al.reshape([self.D, self.d, self.D])
+                self.L = L
+            else:
+                if self.l is None:
+                    self.fixedPoint()
+                val, vec = ts.linalg.eigh(self.l)
+                val = ts.sqrt(val)
+                self.L = ts.dot(ts.diag(val), vec.T.conj())
+                self.Linverse = ts.dot(vec, ts.diag(1 / val))
+                self.Al = ts.tensordot(self.L, self.A, ([1], [0]))
+                self.Al = ts.tensordot(self.Al, self.Linverse, ([2], [0]))
+    
+            self.canonical_form = 'left'
+
+    def rightCanonical(self, iteration=True, tol=1e-14, R0=None, maxiter=None):
+        if self.canonical_form != 'right':
+            if iteration:
+                if maxiter is None:
+                    maxiter = self.D
+                if R0 is None:
+                    R0 = ts.random.randn(self.D, self.D)
+                R0 = R0 / norm(R0)
+                Ar = ts.tensordot(self.A, R0, ([2], [0]))
+                R, Ar = positive_rq(Ar.reshape([self.D, self.d*self.D]))
+                delta = norm(R - R0)
+                i = 1
+                while delta > tol:
+                    Ar = ts.tensordot(self.A, R, ([2], [0]))
+                    R0, Ar = positive_rq(Ar.reshape([self.D, self.d*self.D]))
+                    R0 = R0 / norm(R0)
+                    delta = norm(R0 - R)
+                    R = R0
+                    if i > maxiter:
+                        raise ValueError(f'The iteration still not converge \
+                                after {i} step.')
+                self.Ar = Ar.reshape([self.D, self.d, self.D])
+                self.R = R
+            else:
+                if self.r is None:
+                    self.fixedPoint()
+                val, vec = ts.linalg.eigh(self.r)
+                val = ts.sqrt(val)
+                self.R = vec * val
+                self.Rinverse = ts.dot(ts.diag(1 / val), vec.T.conj())
+                self.Ar = ts.tensordot(self.Rinverse, self.A, ([1], [0]))
+                self.Ar = ts.tensordot(self.Ar, self.R, ([2], [0]))
+            self.canonical_form = 'right'
 
     @staticmethod
     def random(D: int, d: int) -> "UMPS":
@@ -101,9 +182,19 @@ class UMPS:
         return op
 
 
-if __name__ == '__main__':
-    x = UMPS.random(60, 2)
-    E = x.calTransMat(op=True)
-    val = eigs(E, k=1, which='LM', return_eigenvectors=False)
-    print(val)
-    print("debug uniformMPS.py")
+def positive_qr(a: Tensor) -> Union[Tensor, Tensor]:
+    q, r = qr(a, mode='economic')
+
+    sign = ts.diag(ts.sign(ts.diag(r)))
+    q = ts.dot(q, sign)
+    r = ts.dot(sign, r)
+    return q, r
+
+
+def positive_rq(a: Tensor) -> Union[Tensor, Tensor]:
+    r, q = rq(a, mode='economic')
+
+    sign = ts.diag(ts.sign(ts.diag(r)))
+    q = ts.dot(sign, q)
+    r = ts.dot(r, sign)
+    return r, q
