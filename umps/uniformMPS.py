@@ -17,7 +17,6 @@ class UniformMPS:
     def __init__(self, A: Tensor, isnormalize=False):
         '''
         
-        
         '''
         self.A = A
         self.shape = A.shape
@@ -175,7 +174,7 @@ class UniformMPS:
             self.Al = ts.tensordot(self.Al, U, ([2], [0]))
             self.Ar = ts.tensordot(Vh, self.Ar, ([1], [0]))
             self.Ar = ts.tensordot(self.Ar, Vh.conj().T, ([2], [0]))
-            self.Ac = ts.tensordot(self.Al, self.C, ([2], [0]))
+            self.Ac = ts.tensordot(self.Al, ts.diag(self.C), ([2], [0]))
             self.canonical_form = 'mix'
 
     @staticmethod
